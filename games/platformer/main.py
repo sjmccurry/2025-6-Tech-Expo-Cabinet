@@ -42,9 +42,8 @@ LEVEL = [
 "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
 ]
 
-SOLID = {"X"}; COIN = {"c"}; SPIKES = {"^"}; SPAWN = {"@"}; CHECK = {"!"}; GOAL = {"G"}; PLAT_H = {"="}; PLAT_V = {"|"}
+SOLID={"X"}; COIN={"c"}; SPIKES={"^"}; SPAWN={"@"}; CHECK={"!"}; GOAL={"G"}; PLAT_H={"="}; PLAT_V={"|"}
 
-# -------- Joystick-only input --------
 class Input:
     def __init__(self, joy_index=0, deadzone=0.35):
         self.deadzone=deadzone
@@ -52,62 +51,56 @@ class Input:
         self.joy=None
         if pygame.joystick.get_count()>joy_index:
             self.joy=pygame.joystick.Joystick(joy_index); self.joy.init()
-            print(f"[GAME] Using joystick: {self.joy.get_name()} | axes:{self.joy.get_numaxes()} buttons:{self.joy.get_numbuttons()} hats:{self.joy.get_numhats()}")
+            print("[GAME] Using joystick:", self.joy.get_name(), "axes:", self.joy.get_numaxes(), "buttons:", self.joy.get_numbuttons(), "hats:", self.joy.get_numhats())
         else:
             print("[GAME] No joystick detected.")
-        self.prev_btn={}; self.prev_hat=(0,0); self.prev_ax0=0.0
-        self.left_d=False; self.right_d=False; self.jump_d=False; self.back_d=False
-        self.prev_left=False; self.prev_right=False; self.prev_jump=False; self.prev_back=False
-
+        self.btn_prev={}
+        self.hat_prev=(0,0)
+        self.ax0_prev=0.0
+        self.left_prev=False; self.right_prev=False; self.jump_prev=False; self.back_prev=False
+        self.left_now=False; self.right_now=False; self.jump_now=False; self.back_now=False
     def _btn(self,i): return self.joy and self.joy.get_numbuttons()>i and self.joy.get_button(i)
-
     def update(self):
         if not self.joy:
-            self.left_d=self.right_d=self.jump_d=self.back_d=False
+            self.left_prev=self.left_now; self.right_prev=self.right_now; self.jump_prev=self.jump_now; self.back_prev=self.back_now
+            self.left_now=self.right_now=self.jump_now=self.back_now=False
             return
+        self.left_prev=self.left_now; self.right_prev=self.right_now; self.jump_prev=self.jump_now; self.back_prev=self.back_now
         nb=self.joy.get_numbuttons()
         for b in range(nb):
-            v=bool(self.joy.get_button(b)); pv=self.prev_btn.get(b,False)
-            if v!=pv: print(f"[GAME] BUTTON {b} {'DOWN' if v else 'UP'}")
-            self.prev_btn[b]=v
+            v=bool(self.joy.get_button(b)); pv=self.btn_prev.get(b,False)
+            if v!=pv: print("[GAME] BUTTON", b, "DOWN" if v else "UP")
+            self.btn_prev[b]=v
         hat=(0,0)
         if self.joy.get_numhats()>0: hat=self.joy.get_hat(0)
-        if hat!=self.prev_hat: print(f"[GAME] HAT0 -> {hat}")
-        self.prev_hat=hat
+        if hat!=self.hat_prev: print("[GAME] HAT0 ->", hat)
+        self.hat_prev=hat
         ax0=self.joy.get_axis(0) if self.joy.get_numaxes()>0 else 0.0
-        if abs(ax0-self.prev_ax0)>=0.1 or ax0 in (-1.0,0.0,1.0): print(f"[GAME] AXIS0 {ax0:+.2f}")
-        self.prev_ax0=ax0
-
+        if abs(ax0-self.ax0_prev)>=0.1 or ax0 in (-1.0,0.0,1.0): print("[GAME] AXIS0 %+.2f" % ax0)
+        self.ax0_prev=ax0
         x=hat[0]
         if x==0:
             if ax0<-self.deadzone: x=-1
             elif ax0> self.deadzone: x=+1
-
-        self.left_d  = (x<0)
-        self.right_d = (x>0)
-        self.jump_d  = bool(self._btn(0))         # A button
-        self.back_d  = bool(self._btn(1) or self._btn(7))  # B or Start
-
-    def left(self):  return self.left_d
-    def right(self): return self.right_d
-
-    def jump_pressed(self):
-        now=self.jump_d; was=self.prev_jump; self.prev_jump=now
-        if now and not was: print("[GAME] ACTION JUMP PRESSED")
-        return now and not was
-
+        self.left_now  = (x<0)
+        self.right_now = (x>0)
+        self.jump_now  = bool(self._btn(0))
+        self.back_now  = bool(self._btn(1) or self._btn(7))
+    def left(self):  return self.left_now
+    def right(self): return self.right_now
+    def jump_pressed(self): 
+        v = self.jump_now and not self.jump_prev
+        if v: print("[GAME] ACTION JUMP PRESSED")
+        return v
     def jump_released(self):
-        now=self.jump_d; was=self.prev_jump
-        rel = (not now) and was
-        if rel: print("[GAME] ACTION JUMP RELEASED")
-        return rel
-
+        v = (not self.jump_now) and self.jump_prev
+        if v: print("[GAME] ACTION JUMP RELEASED")
+        return v
     def back_pressed(self):
-        now=self.back_d; was=self.prev_back; self.prev_back=now
-        if now and not was: print("[GAME] ACTION BACK PRESSED")
-        return now and not was
+        v = self.back_now and not self.back_prev
+        if v: print("[GAME] ACTION BACK PRESSED")
+        return v
 
-# -------- Camera/Entities/World --------
 class Camera:
     def __init__(self): self.x=self.y=0.0; self.shake_t=0.0; self.shake_mag=0.0
     def update(self,target_rect, level_w, level_h):
@@ -146,7 +139,9 @@ class Platform:
     @property
     def delta(self): return pygame.Vector2(self.rect.x-self.prev.x, self.rect.y-self.prev.y)
     def draw(self,s,camera):
-        rr=camera.apply(self.rect); rrect(s,(90,90,110),rr); pygame.draw.rect(s,(140,140,170),rr,2)
+        rr=camera.apply(self.rect)
+        rrect(s, rr, (90,90,110), 6)
+        pygame.draw.rect(s,(140,140,170), rr, 2)
 
 class Enemy:
     def __init__(self,x,y):
@@ -155,7 +150,7 @@ class Enemy:
         self.rect.x += int(self.vx*self.dir*dt)
         if collide_solid(self.rect, solids): self.dir*=-1; self.rect.x += int(self.vx*self.dir*dt)
     def draw(self,s,camera):
-        rr=camera.apply(self.rect); rrect(s,rr,(200,80,120),8); pygame.draw.rect(s,(255,160,200),rr,2)
+        rr=camera.apply(self.rect); rrect(s, rr, (200,80,120), 8); pygame.draw.rect(s,(255,160,200), rr, 2)
 
 class Player:
     def __init__(self,x,y):
@@ -172,7 +167,6 @@ class Player:
             elif self.vx<0: self.vx=min(0,self.vx+deccel*dt)
         else:
             self.vx += ax*dt; self.vx = max(-speed, min(speed, self.vx))
-
         if inp.jump_pressed(): self.jump_buffer=0.15
         else: self.jump_buffer=max(0.0,self.jump_buffer-dt)
         if self.on_ground: self.coyote=0.12
@@ -183,14 +177,11 @@ class Player:
                 ang=random.uniform(-0.4,0.4); sp=random.uniform(80,160)
                 particles.append(Particle((self.rect.centerx,self.rect.bottom),(sp*math.cos(ang),-abs(sp*math.sin(ang))),0.4,(255,255,255),3))
         if inp.jump_released() and self.vy<-120: self.vy=-120
-
         self.vy += 1000*dt; self.vy = max(-1000, min(980, self.vy))
         self.move_x(self.vx*dt, solids); self.apply_platform_x(plats)
         self.move_y(self.vy*dt, solids); self.on_ground=False; self.apply_platform_y(plats)
-
         self.collect(coins, particles)
-        if self.touch(spikes) or any(self.rect.colliderect(e.rect) for e in enemies):
-            self.die(camera, particles)
+        if self.touch(spikes) or any(self.rect.colliderect(e.rect) for e in enemies): self.die(camera, particles)
         if any(self.rect.colliderect(r) for r in goal): return "win"
         for r in checks:
             if self.rect.colliderect(r): self.checkpoint.update(r.x, r.y - self.rect.h - 6)
@@ -272,20 +263,17 @@ def draw_world(s, camera, solids, coins, spikes, enemies, plats, goal, checks):
     for r in checks: rr=camera.apply(r); pygame.draw.rect(s,(100,180,255),rr); pygame.draw.rect(s,WHITE,rr,2)
 
 def hud(s, player):
-    t=F(28).render(f"Coins: {player.coins}", True, WHITE); s.blit(t,(16,12))
+    t=F(28).render("Coins: %d" % player.coins, True, WHITE); s.blit(t,(16,12))
 
 def run():
     solids, coins, spikes, enemies, plats, goal, checks, size, spawn = parse_level(LEVEL)
     ply = Player(spawn[0], spawn[1]); cam = Camera(); parts=[]
     inp = Input(joy_index=0, deadzone=0.35)
-    paused=False
     while True:
         for e in pygame.event.get():
             if e.type==pygame.QUIT: pygame.quit(); sys.exit()
         inp.update()
         if inp.back_pressed(): pygame.quit(); sys.exit()
-        if paused:
-            screen.fill(DARK); t=F(48).render("Paused", True, WHITE); screen.blit(t,(W//2-t.get_width()//2,H//2-t.get_height()//2)); pygame.display.flip(); clock.tick(FPS); continue
         dt = clock.tick(FPS)/1000.0
         for p in plats: p.update(dt)
         for en in enemies: en.update(dt, solids+[p.rect for p in plats])
