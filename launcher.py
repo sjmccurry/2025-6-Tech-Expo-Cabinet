@@ -169,7 +169,7 @@ def draw_focus_card_base(surf, entry, rect):
 
 # ---------- Main ----------
 def run():
-    W,H = 900,600
+    W,H = 1020,600
     screen = pygame.display.set_mode((W,H))
     pygame.display.set_caption("Arcade Launcher")
     clock = pygame.time.Clock()
