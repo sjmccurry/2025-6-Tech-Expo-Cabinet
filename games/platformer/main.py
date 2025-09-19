@@ -281,7 +281,7 @@ def run():
         cam.update(ply.rect, size[0], size[1])
         screen.fill(DARK); draw_world(screen, cam, solids, coins, spikes, enemies, plats, goal, checks)
         pr = cam.apply(ply.rect); rrect(screen, pr, ACCENT, 8); pygame.draw.rect(screen, WHITE, pr, 2)
-        i=0
+        i=0 
         while i<len(parts):
             if parts[i].update(dt): parts[i].draw(screen,cam); i+=1
             else: parts.pop(i)
@@ -293,4 +293,4 @@ def run():
         pygame.display.flip()
 
 if __name__=="__main__":
-    run()
+    run() 
