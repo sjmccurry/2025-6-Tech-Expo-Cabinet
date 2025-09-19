@@ -1,4 +1,5 @@
 import os, sys, json, math, time, subprocess, pygame
+from typing import Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -103,8 +104,13 @@ class JoyInput:
 # ---------- Data ----------
 @dataclass
 class GameEntry:
-    slug: str; title: str; subtitle: str; path: str
-    cover: pygame.Surface | None; accent: tuple
+    slug: str
+    title: str
+    subtitle: str
+    path: str
+    cover: Optional[pygame.Surface]
+    accent: Tuple[int, int, int]
+
 
 def load_cover(p):
     try: return pygame.image.load(p).convert_alpha()
