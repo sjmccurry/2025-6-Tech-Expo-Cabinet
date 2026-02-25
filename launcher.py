@@ -1,107 +1,145 @@
-import os, sys, json, math, time, subprocess, pygame
+import os
+import sys
+import json
+import math
+import time
+import subprocess
+import pygame
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum, auto
 
 pygame.init()
 
-# ---------- Drawing helpers (safe on pygame 1.9.x) ----------
-def rrect(surf, rect, color, radius=0, width=0):
+BACKGROUND_COLOR = (15, 16, 20)
+CARD_BACKGROUND_COLOR = (28, 29, 36)
+TEXT_COLOR_PRIMARY = (238, 239, 244)
+TEXT_COLOR_SECONDARY = (188, 190, 198)
+
+def draw_rounded_rect(surface, rect, color, radius=0, width=0):
     try:
-        pygame.draw.rect(surf, color, rect, width, border_radius=radius)
+        pygame.draw.rect(surface, color, rect, width, border_radius=radius)
     except TypeError:
-        pygame.draw.rect(surf, color, rect, width)
+        pygame.draw.rect(surface, color, rect, width)
 
-def scale_to_cover(surface, size):
-    iw, ih = surface.get_size(); rw, rh = size
-    sc = max(float(rw)/iw, float(rh)/ih)
-    return pygame.transform.smoothscale(surface, (int(iw*sc), int(ih*sc)))
+def scale_to_cover(surface, target_size):
+    image_width, image_height = surface.get_size()
+    target_width, target_height = target_size
+    
+    scale_factor = max(float(target_width) / image_width, float(target_height) / image_height)
+    new_width = int(image_width * scale_factor)
+    new_height = int(image_height * scale_factor)
+    
+    return pygame.transform.smoothscale(surface, (new_width, new_height))
 
-def blit_rounded_image(dst, img, rect, radius):
-    if not img:
-        rrect(dst, rect, (40,42,50), radius)
+def blit_rounded_image(destination_surface, image, rect, radius):
+    if not image:
+        draw_rounded_rect(destination_surface, rect, (40, 42, 50), radius)
         return
-    scaled = scale_to_cover(img, (rect.w, rect.h))
-    layer = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    x = (rect.w - scaled.get_width())//2
-    y = (rect.h - scaled.get_height())//2
-    layer.blit(scaled, (x, y))
-    mask = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
-    rrect(mask, mask.get_rect(), (255,255,255,255), radius)
-    layer.blit(mask, (0,0), special_flags=pygame.BLEND_RGBA_MULT)
-    dst.blit(layer, rect.topleft)
+        
+    scaled_image = scale_to_cover(image, (rect.width, rect.height))
+    layer = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    
+    x_offset = (rect.width - scaled_image.get_width()) // 2
+    y_offset = (rect.height - scaled_image.get_height()) // 2
+    layer.blit(scaled_image, (x_offset, y_offset))
+    
+    mask = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+    draw_rounded_rect(mask, mask.get_rect(), (255, 255, 255, 255), radius)
+    
+    layer.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    destination_surface.blit(layer, rect.topleft)
 
-def F(sz): return pygame.font.Font(None, sz)
+def get_font(size): 
+    return pygame.font.Font(None, size)
 
-# ---------- Joystick-only input ----------
 class Action(Enum):
-    LEFT=auto(); RIGHT=auto(); LAUNCH=auto(); BACK=auto()
+    LEFT = auto()
+    RIGHT = auto()
+    LAUNCH = auto()
+    BACK = auto()
 
 class JoyInput:
     def __init__(self, joy_index=0, deadzone=0.35):
         self.deadzone = deadzone
         pygame.joystick.init()
-        self.joy = None
+        self.joystick = None
+        
         if pygame.joystick.get_count() > joy_index:
-            self.joy = pygame.joystick.Joystick(joy_index); self.joy.init()
-        if self.joy:
-            print(f"[LAUNCHER] Using joystick: {self.joy.get_name()} | axes:{self.joy.get_numaxes()} buttons:{self.joy.get_numbuttons()} hats:{self.joy.get_numhats()}")
+            self.joystick = pygame.joystick.Joystick(joy_index)
+            self.joystick.init()
+            
+        if self.joystick:
+            name = self.joystick.get_name()
+            axes = self.joystick.get_numaxes()
+            buttons = self.joystick.get_numbuttons()
+            hats = self.joystick.get_numhats()
+            print(f"[LAUNCHER] Using joystick: {name} | axes:{axes} buttons:{buttons} hats:{hats}")
         else:
             print("[LAUNCHER] No joystick detected.")
-        self.prev_btn = {}
-        self.prev_hat = (0,0)
-        self.prev_axis0 = 0.0
-        self.prev_act = {a:False for a in Action}
-        self.cur_act  = {a:False for a in Action}
+            
+        self.previous_buttons = {}
+        self.previous_hat = (0, 0)
+        self.previous_axis_x = 0.0
+        self.previous_actions = {action: False for action in Action}
+        self.current_actions = {action: False for action in Action}
 
-    def _btn(self, i):
-        return self.joy and self.joy.get_numbuttons() > i and self.joy.get_button(i)
+    def _is_button_pressed(self, button_index):
+        if self.joystick and self.joystick.get_numbuttons() > button_index:
+            return self.joystick.get_button(button_index)
+        return False
 
     def update(self):
-        # log button edges
-        if self.joy:
-            nb = self.joy.get_numbuttons()
-            for b in range(nb):
-                v = bool(self.joy.get_button(b))
-                pv = self.prev_btn.get(b, False)
-                if v != pv:
-                    print(f"[LAUNCHER] BUTTON {b} {'DOWN' if v else 'UP'}")
-                self.prev_btn[b] = v
+        if self.joystick:
+            total_buttons = self.joystick.get_numbuttons()
+            for button_index in range(total_buttons):
+                is_pressed = bool(self.joystick.get_button(button_index))
+                was_pressed = self.previous_buttons.get(button_index, False)
+                
+                if is_pressed != was_pressed:
+                    state = 'DOWN' if is_pressed else 'UP'
+                    print(f"[LAUNCHER] BUTTON {button_index} {state}")
+                self.previous_buttons[button_index] = is_pressed
 
-            hat = (0,0)
-            if self.joy.get_numhats() > 0:
-                hat = self.joy.get_hat(0)
-            if hat != self.prev_hat:
-                print(f"[LAUNCHER] HAT0 -> {hat}")
-            self.prev_hat = hat
+            current_hat = (0, 0)
+            if self.joystick.get_numhats() > 0:
+                current_hat = self.joystick.get_hat(0)
+                
+            if current_hat != self.previous_hat:
+                print(f"[LAUNCHER] HAT0 -> {current_hat}")
+            self.previous_hat = current_hat
 
-            ax0 = self.joy.get_axis(0) if self.joy.get_numaxes() > 0 else 0.0
-            # print only when crossing notable steps
-            if abs(ax0 - self.prev_axis0) >= 0.1 or ax0 in (-1.0, 0.0, 1.0):
-                print(f"[LAUNCHER] AXIS0 {ax0:+.2f}")
-            self.prev_axis0 = ax0
+            axis_x = self.joystick.get_axis(0) if self.joystick.get_numaxes() > 0 else 0.0
+            
+            if abs(axis_x - self.previous_axis_x) >= 0.1 or axis_x in (-1.0, 0.0, 1.0):
+                print(f"[LAUNCHER] AXIS0 {axis_x:+.2f}")
+            self.previous_axis_x = axis_x
 
-            x = hat[0]
-            if x == 0:
-                if ax0 < -self.deadzone: x = -1
-                elif ax0 > self.deadzone: x = +1
+            direction_x = current_hat[0]
+            if direction_x == 0:
+                if axis_x < -self.deadzone: 
+                    direction_x = -1
+                elif axis_x > self.deadzone: 
+                    direction_x = 1
 
-            self.cur_act[Action.LEFT]  = (x < 0)
-            self.cur_act[Action.RIGHT] = (x > 0)
-            self.cur_act[Action.LAUNCH]= bool(self._btn(0))
-            self.cur_act[Action.BACK]  = bool(self._btn(1) or self._btn(7))
+            self.current_actions[Action.LEFT] = (direction_x < 0)
+            self.current_actions[Action.RIGHT] = (direction_x > 0)
+            self.current_actions[Action.LAUNCH] = bool(self._is_button_pressed(0))
+            self.current_actions[Action.BACK] = bool(self._is_button_pressed(1) or self._is_button_pressed(7))
         else:
-            for a in self.cur_act: self.cur_act[a] = False
+            for action in self.current_actions: 
+                self.current_actions[action] = False
 
-    def pressed(self, act):
-        was = self.prev_act[act]
-        now = self.cur_act[act]
-        self.prev_act[act] = now
-        if now and not was:
-            print(f"[LAUNCHER] ACTION {act.name} PRESSED")
-        return now and not was
+    def is_action_just_pressed(self, action):
+        was_pressed = self.previous_actions[action]
+        is_pressed_now = self.current_actions[action]
+        self.previous_actions[action] = is_pressed_now
+        
+        if is_pressed_now and not was_pressed:
+            print(f"[LAUNCHER] ACTION {action.name} PRESSED")
+            
+        return is_pressed_now and not was_pressed
 
-# ---------- Data ----------
 @dataclass
 class GameEntry:
     slug: str
@@ -112,137 +150,219 @@ class GameEntry:
     accent: Tuple[int, int, int]
 
 
-def load_cover(p):
-    try: return pygame.image.load(p).convert_alpha()
-    except Exception: return None
+def load_cover_image(filepath):
+    try: 
+        return pygame.image.load(filepath).convert_alpha()
+    except Exception: 
+        return None
 
-def discover_games(root):
-    out=[]
-    if not os.path.isdir(root): return out
-    for slug in sorted(os.listdir(root)):
-        p=os.path.join(root,slug)
-        if not (os.path.isdir(p) and os.path.isfile(os.path.join(p,"main.py"))): continue
-        title=slug.replace("_"," ").title(); subtitle=""; accent=(64,140,255)
-        meta=os.path.join(p,"meta.json")
-        if os.path.isfile(meta):
+def discover_games(root_directory):
+    discovered_games = []
+    
+    if not os.path.isdir(root_directory): 
+        return discovered_games
+        
+    for slug in sorted(os.listdir(root_directory)):
+        game_path = os.path.join(root_directory, slug)
+        main_script_path = os.path.join(game_path, "main.py")
+        
+        if not (os.path.isdir(game_path) and os.path.isfile(main_script_path)): 
+            continue
+            
+        title = slug.replace("_", " ").title()
+        subtitle = ""
+        accent_color = (64, 140, 255)
+        meta_filepath = os.path.join(game_path, "meta.json")
+        
+        if os.path.isfile(meta_filepath):
             try:
-                j=json.load(open(meta,"r",encoding="utf-8"))
-                title=j.get("title",title); subtitle=j.get("subtitle","")
-                if isinstance(j.get("accent"),list) and len(j["accent"])==3: accent=tuple(int(x) for x in j["accent"])
-            except Exception: pass
-        cv=None
-        for n in ("cover.png","cover.jpg","cover.jpeg","cover.webp"):
-            cp=os.path.join(p,n)
-            if os.path.isfile(cp): cv=load_cover(cp); break
-        out.append(GameEntry(slug,title,subtitle,p,cv,accent))
-    return out
+                with open(meta_filepath, "r", encoding="utf-8") as meta_file:
+                    metadata = json.load(meta_file)
+                    title = metadata.get("title", title)
+                    subtitle = metadata.get("subtitle", "")
+                    
+                    if isinstance(metadata.get("accent"), list) and len(metadata["accent"]) == 3: 
+                        accent_color = tuple(int(color_value) for color_value in metadata["accent"])
+            except Exception: 
+                pass
+                
+        cover_image = None
+        valid_cover_filenames = ("cover.png", "cover.jpg", "cover.jpeg", "cover.webp")
+        
+        for filename in valid_cover_filenames:
+            cover_filepath = os.path.join(game_path, filename)
+            if os.path.isfile(cover_filepath): 
+                cover_image = load_cover_image(cover_filepath)
+                break
+                
+        discovered_games.append(GameEntry(slug, title, subtitle, game_path, cover_image, accent_color))
+        
+    return discovered_games
 
-# ---------- Launcher visuals (minimal, clean) ----------
-BG=(15,16,20); CARD_BG=(28,29,36); INK=(238,239,244); INK2=(188,190,198)
+def paint_background(surface):
+    surface.fill(BACKGROUND_COLOR)
+    width, height = surface.get_size()
+    band_surface = pygame.Surface((width, int(height * 0.45)), pygame.SRCALPHA)
+    draw_rounded_rect(band_surface, band_surface.get_rect(), (255, 255, 255, 12), 0)
+    
+    try: 
+        surface.blit(band_surface, (0, int(height * 0.06)), special_flags=pygame.BLEND_RGBA_SUB)
+    except Exception: 
+        surface.blit(band_surface, (0, int(height * 0.06)))
 
-def paint_bg(surf):
-    surf.fill(BG)
-    w,h = surf.get_size()
-    band = pygame.Surface((w, int(h*0.45)), pygame.SRCALPHA)
-    rrect(band, band.get_rect(), (255,255,255,12), 0)
-    try: surf.blit(band, (0, int(h*0.06)), special_flags=pygame.BLEND_RGBA_SUB)
-    except: surf.blit(band, (0, int(h*0.06)))
+def draw_side_card(surface, entry, rect, fade_amount):
+    draw_rounded_rect(surface, rect, CARD_BACKGROUND_COLOR, 20)
+    inner_rect = rect.inflate(-14, -14)
+    blit_rounded_image(surface, entry.cover, inner_rect, 16)
+    
+    dim_overlay = pygame.Surface(inner_rect.size, pygame.SRCALPHA)
+    dim_overlay.fill((0, 0, 0, int(200 * (1 - fade_amount))))
+    surface.blit(dim_overlay, inner_rect.topleft)
+    
+    pygame.draw.rect(surface, (*entry.accent, 50), rect, 2)
 
-def draw_side_card(surf, entry, rect, fade):
-    rrect(surf, rect, CARD_BG, 20)
-    inner = rect.inflate(-14,-14)
-    blit_rounded_image(surf, entry.cover, inner, 16)
-    dim = pygame.Surface(inner.size, pygame.SRCALPHA)
-    dim.fill((0,0,0,int(200*(1-fade))))
-    surf.blit(dim, inner.topleft)
-    pygame.draw.rect(surf, (*entry.accent,50), rect, 2)
+def draw_focus_card_base(surface, entry, rect):
+    draw_rounded_rect(surface, rect, CARD_BACKGROUND_COLOR, 20)
+    padding = 16
+    
+    image_rect = pygame.Rect(rect.x + padding, rect.y + padding, rect.width - 2 * padding, int(rect.height * 0.68))
+    footer_rect = pygame.Rect(rect.x + padding, image_rect.bottom + 8, rect.width - 2 * padding, rect.bottom - (image_rect.bottom + 8) - padding)
+    
+    blit_rounded_image(surface, entry.cover, image_rect, 14)
+    draw_rounded_rect(surface, footer_rect, (22, 23, 28), 12)
+    pygame.draw.rect(surface, (*entry.accent, 80), rect, 2)
+    
+    return footer_rect
 
-def draw_focus_card_base(surf, entry, rect):
-    rrect(surf, rect, CARD_BG, 20)
-    pad=16
-    img_rect = pygame.Rect(rect.x+pad, rect.y+pad, rect.w-2*pad, int(rect.h*0.68))
-    footer   = pygame.Rect(rect.x+pad, img_rect.bottom+8, rect.w-2*pad, rect.bottom-(img_rect.bottom+8)-pad)
-    blit_rounded_image(surf, entry.cover, img_rect, 14)
-    rrect(surf, footer, (22,23,28), 12)
-    pygame.draw.rect(surf, (*entry.accent,80), rect, 2)
-    return footer
-
-# ---------- Main ----------
 def run():
-    W,H = 1180,600
-    screen = pygame.display.set_mode((W,H))
+    screen_width, screen_height = 1180, 600
+    screen = pygame.display.set_mode((screen_width, screen_height))
     pygame.display.set_caption("Arcade Launcher")
     clock = pygame.time.Clock()
 
-    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games")
-    games = discover_games(root); n=len(games)
-    inp = JoyInput(joy_index=0, deadzone=0.35)
+    games_directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "games")
+    games = discover_games(games_directory)
+    total_games = len(games)
+    
+    joystick_input = JoyInput(joy_index=0, deadzone=0.35)
 
-    idx=0; scroll=float(idx); t=0.0
+    current_index = 0
+    scroll_position = float(current_index)
+    time_elapsed = 0.0
 
     while True:
-        for e in pygame.event.get():
-            if e.type == pygame.QUIT: pygame.quit(); sys.exit()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT: 
+                pygame.quit()
+                sys.exit()
 
-        inp.update()
+        joystick_input.update()
 
-        if n:
-            if inp.pressed(Action.RIGHT): idx=(idx+1)%n
-            if inp.pressed(Action.LEFT):  idx=(idx-1)%n
+        if total_games > 0:
+            if joystick_input.is_action_just_pressed(Action.RIGHT): 
+                current_index = (current_index + 1) % total_games
+            if joystick_input.is_action_just_pressed(Action.LEFT):  
+                current_index = (current_index - 1) % total_games
 
-        dt = clock.tick(60)/1000.0
-        scroll += (idx - scroll) * min(1.0, dt*10.0)
+        delta_time = clock.tick(60) / 1000.0
+        scroll_position += (current_index - scroll_position) * min(1.0, delta_time * 10.0)
 
-        paint_bg(screen)
+        paint_background(screen)
 
-        if n:
-            hero_w=int(min(W*0.50,760)); hero_h=int(hero_w*0.60)
-            center=pygame.Rect(0,0,hero_w,hero_h); center.center=(W//2,int(H*0.56))
-            spacing=int(hero_w*0.72)
-            items=[]
-            for i in range(n):
-                delta=((i - scroll + n/2) % n) - n/2
-                if abs(delta)>3: continue
-                scale=0.62+0.38*max(0.0,1.0-abs(delta)*0.55)
-                rect=center.move(int(delta*spacing), int(abs(delta)*hero_h*0.10))
-                rect=pygame.Rect(rect.x,rect.y,int(center.w*scale),int(center.h*scale))
-                items.append((i,delta,scale,rect))
-            for i,delta,scale,rect in sorted(items,key=lambda x:x[2]):
-                if i==idx: continue
-                draw_side_card(screen,games[i],rect,0.85 if abs(delta)<0.5 else 0.65)
-            focus_footer=None; focus_entry=None; focus_scale=None
-            for i,delta,scale,rect in items:
-                if i==idx:
-                    focus_footer=draw_focus_card_base(screen,games[i],rect); focus_entry=games[i]; focus_scale=scale; break
+        if total_games > 0:
+            hero_width = int(min(screen_width * 0.50, 760))
+            hero_height = int(hero_width * 0.60)
+            center_rect = pygame.Rect(0, 0, hero_width, hero_height)
+            center_rect.center = (screen_width // 2, int(screen_height * 0.56))
+            card_spacing = int(hero_width * 0.72)
+            
+            render_items = []
+            
+            for index in range(total_games):
+                distance_from_center = ((index - scroll_position + total_games / 2) % total_games) - total_games / 2
+                
+                if abs(distance_from_center) > 3: 
+                    continue
+                    
+                scale_factor = 0.62 + 0.38 * max(0.0, 1.0 - abs(distance_from_center) * 0.55)
+                x_offset = int(distance_from_center * card_spacing)
+                y_offset = int(abs(distance_from_center) * hero_height * 0.10)
+                
+                translated_rect = center_rect.move(x_offset, y_offset)
+                final_rect = pygame.Rect(translated_rect.x, translated_rect.y, int(center_rect.width * scale_factor), int(center_rect.height * scale_factor))
+                
+                render_items.append((index, distance_from_center, scale_factor, final_rect))
+                
+            for index, distance, scale, rect in sorted(render_items, key=lambda item: item[2]):
+                if index == current_index: 
+                    continue
+                fade = 0.85 if abs(distance) < 0.5 else 0.65
+                draw_side_card(screen, games[index], rect, fade)
+                
+            focused_footer = None
+            focused_entry = None
+            focused_scale = None
+            
+            for index, distance, scale, rect in render_items:
+                if index == current_index:
+                    focused_footer = draw_focus_card_base(screen, games[index], rect)
+                    focused_entry = games[index]
+                    focused_scale = scale
+                    break
 
-        title = F(66).render("ARCADE", True, INK); screen.blit(title,(48,40))
-        sub = F(22).render("D-pad/Stick: browse  •  A: play  •  B/Start: back", True, INK2); screen.blit(sub,(48,40+title.get_height()+6))
+        title_text = get_font(66).render("ARCADE", True, TEXT_COLOR_PRIMARY)
+        screen.blit(title_text, (48, 40))
+        
+        subtitle_text = get_font(22).render("D-pad/Stick: browse  •  A: play  •  B/Start: back", True, TEXT_COLOR_SECONDARY)
+        screen.blit(subtitle_text, (48, 40 + title_text.get_height() + 6))
 
-        if n and focus_entry:
-            t1=F(int(38*focus_scale)).render(focus_entry.title, True, INK); screen.blit(t1,(focus_footer.x+14, focus_footer.y+10))
-            if focus_entry.subtitle:
-                t2=F(int(22*focus_scale)).render(focus_entry.subtitle, True, INK2); screen.blit(t2,(focus_footer.x+14, focus_footer.bottom-28))
-            pulse=0.5*(1+math.sin(t*2.2))
-            pill_w=min(focus_footer.w-20, int(360*focus_scale)); pill_h=int(40*focus_scale)
-            pill=pygame.Rect(0,0,pill_w,pill_h); pill.center=(focus_footer.centerx, focus_footer.bottom+int(24*focus_scale))
-            rrect(screen, pill, (*focus_entry.accent, int(190+40*pulse)), 999)
-            txt=F(int(24*focus_scale)).render("Press A to Play", True, (255,255,255))
-            screen.blit(txt, txt.get_rect(center=pill.center))
+        if total_games > 0 and focused_entry:
+            game_title_text = get_font(int(38 * focused_scale)).render(focused_entry.title, True, TEXT_COLOR_PRIMARY)
+            screen.blit(game_title_text, (focused_footer.x + 14, focused_footer.y + 10))
+            
+            if focused_entry.subtitle:
+                game_subtitle_text = get_font(int(22 * focused_scale)).render(focused_entry.subtitle, True, TEXT_COLOR_SECONDARY)
+                screen.blit(game_subtitle_text, (focused_footer.x + 14, focused_footer.bottom - 28))
+                
+            pulse_effect = 0.5 * (1 + math.sin(time_elapsed * 2.2))
+            pill_width = min(focused_footer.width - 20, int(360 * focused_scale))
+            pill_height = int(40 * focused_scale)
+            
+            pill_rect = pygame.Rect(0, 0, pill_width, pill_height)
+            pill_rect.center = (focused_footer.centerx, focused_footer.bottom + int(24 * focused_scale))
+            
+            draw_rounded_rect(screen, pill_rect, (*focused_entry.accent, int(190 + 40 * pulse_effect)), 999)
+            
+            play_text = get_font(int(24 * focused_scale)).render("Press A to Play", True, (255, 255, 255))
+            screen.blit(play_text, play_text.get_rect(center=pill_rect.center))
 
-        if n and inp.pressed(Action.LAUNCH):
-            chosen = games[idx]
-            print(f"[LAUNCHER] Launching {chosen.slug}")
+        if total_games > 0 and joystick_input.is_action_just_pressed(Action.LAUNCH):
+            chosen_game = games[current_index]
+            print(f"[LAUNCHER] Launching {chosen_game.slug}")
+            
             pygame.display.quit()
-            try: subprocess.call([sys.executable, os.path.join(chosen.path, "main.py")])
-            except Exception as e: print("[LAUNCHER] Game error:", e)
-            pygame.display.init(); screen = pygame.display.set_mode((W,H)); clock = pygame.time.Clock()
-            games = discover_games(root); n=len(games); idx=min(idx,n-1) if n else 0; scroll=float(idx)
-            inp = JoyInput(joy_index=0, deadzone=0.35)
+            try: 
+                subprocess.call([sys.executable, os.path.join(chosen_game.path, "main.py")])
+            except Exception as error: 
+                print("[LAUNCHER] Game error:", error)
+                
+            pygame.display.init()
+            screen = pygame.display.set_mode((screen_width, screen_height))
+            clock = pygame.time.Clock()
+            
+            games = discover_games(games_directory)
+            total_games = len(games)
+            current_index = min(current_index, total_games - 1) if total_games > 0 else 0
+            scroll_position = float(current_index)
+            joystick_input = JoyInput(joy_index=0, deadzone=0.35)
 
-        if inp.pressed(Action.BACK):
-            print("[LAUNCHER] Back/Exit pressed"); pygame.quit(); sys.exit()
+        if joystick_input.is_action_just_pressed(Action.BACK):
+            print("[LAUNCHER] Back/Exit pressed")
+            pygame.quit()
+            sys.exit()
 
-        pygame.display.flip(); t += dt
+        pygame.display.flip()
+        time_elapsed += delta_time
 
-if __name__=="__main__":
+if __name__ == "__main__":
     run()
